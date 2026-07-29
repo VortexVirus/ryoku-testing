@@ -1,0 +1,6 @@
+#!/usr/bin/bash
+cd ~/ & rm ~/ryoku-testing
+sudo rm /usr/bin/ryoku-testing
+curl https://raw.githubusercontent.com/VortexVirus/ryoku-testing/refs/heads/main/ryoku-testing -o ./ryoku-testing
+sudo mv ~/ryoku-testing /usr/bin/ryoku-testing
+chmod +x /usr/bin/ryoku-testing

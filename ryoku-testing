@@ -1,61 +1,60 @@
 #!/usr/bin/env bash
 #
-# toggle_ryoku_channel.sh
+# ryoku-toggle-channel.sh
 #
-# Toggles RYOKU_CHANNEL between "main" and "unstable-dev" in two files:
-#   ~/.config/hypr/user.lua           -> hl.env("RYOKU_CHANNEL", "unstable-dev")
-#   ~/.config/environment.d/ryoku.conf -> RYOKU_CHANNEL=unstable-dev
+# Toggles the Ryoku channel between "main" and "unstable-dev":
+#   - flips ~/.config/environment.d/ryoku.conf   (RYOKU_CHANNEL=...)
+#   - flips ~/.config/hypr/user.lua              (hl.env("RYOKU_CHANNEL", "..."))
+#   - checks out the matching branch in ~/ryoku-arch and hard-resets to origin
 #
-# If a line is missing from a file, it's added there (defaulting to "main").
-# Both files are kept in sync to the same final value.
+# This does NOT run `ryoku update`, rebuild/redeploy the shell, or restart
+# ryoku-shell. Run `ryoku update` yourself afterwards to actually build and
+# apply the change (this is what makes `ryoku status` match reality).
+#
+# Same safety rule as ryoku-track: refuses to touch ~/ryoku-arch if it exists
+# but its origin isn't a ryoku-arch remote. Also refuses to reset the repo if
+# it has local uncommitted changes, so you don't silently lose work.
 
 set -euo pipefail
 
-LUA_FILE="$HOME/.config/hypr/user.lua"
-ENV_FILE="$HOME/.config/environment.d/ryoku.conf"
+REPO="$HOME/ryoku-arch"
+REPO_URL="https://github.com/neur0map/ryoku-arch.git"
 
-FUNC="hl.env"
+ENV_FILE="$HOME/.config/environment.d/ryoku.conf"
+LUA_FILE="$HOME/.config/hypr/user.lua"
+
 ENV_NAME="RYOKU_CHANNEL"
+FUNC="hl.env"
 VALUE_A="main"
 VALUE_B="unstable-dev"
 
-LUA_REGEX="^[[:space:]]*${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*\"(${VALUE_A}|${VALUE_B})\"[[:space:]]*\)"
-ENV_REGEX="^[[:space:]]*${ENV_NAME}[[:space:]]*=[[:space:]]*(${VALUE_A}|${VALUE_B})[[:space:]]*$"
+say() { printf '\n==> %s\n' "$*"; }
 
-# --- Determine current value: prefer whichever file exists and has the line ---
+ENV_REGEX="^[[:space:]]*${ENV_NAME}[[:space:]]*=[[:space:]]*(${VALUE_A}|${VALUE_B})[[:space:]]*$"
+LUA_REGEX="^[[:space:]]*${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*\"(${VALUE_A}|${VALUE_B})\"[[:space:]]*\)"
+
+# --- Determine current value: prefer the env file, fall back to the lua file ---
 CURRENT_VALUE=""
 
-if [ -f "$LUA_FILE" ] && grep -qE "$LUA_REGEX" "$LUA_FILE"; then
-    CURRENT_VALUE=$(grep -oE "$LUA_REGEX" "$LUA_FILE" | grep -oE "\"(${VALUE_A}|${VALUE_B})\"" | tail -n1 | tr -d '"')
-elif [ -f "$ENV_FILE" ] && grep -qE "$ENV_REGEX" "$ENV_FILE"; then
+if [ -f "$ENV_FILE" ] && grep -qE "$ENV_REGEX" "$ENV_FILE"; then
     CURRENT_VALUE=$(grep -oE "$ENV_REGEX" "$ENV_FILE" | grep -oE "(${VALUE_A}|${VALUE_B})[[:space:]]*$" | tail -n1 | tr -d '[:space:]')
+elif [ -f "$LUA_FILE" ] && grep -qE "$LUA_REGEX" "$LUA_FILE"; then
+    CURRENT_VALUE=$(grep -oE "$LUA_REGEX" "$LUA_FILE" | grep -oE "\"(${VALUE_A}|${VALUE_B})\"" | tail -n1 | tr -d '"')
 fi
 
 if [ -z "$CURRENT_VALUE" ]; then
     NEW_VALUE="$VALUE_A"
-    echo "Neither file had the setting. Defaulting to \"${NEW_VALUE}\"."
+    say "Neither file had the channel set. Defaulting to \"${NEW_VALUE}\"."
 else
     if [ "$CURRENT_VALUE" = "$VALUE_A" ]; then
         NEW_VALUE="$VALUE_B"
     else
         NEW_VALUE="$VALUE_A"
     fi
-    echo "Current value: \"${CURRENT_VALUE}\" -> switching to \"${NEW_VALUE}\"."
+    say "Current channel: \"${CURRENT_VALUE}\" -> switching to \"${NEW_VALUE}\"."
 fi
 
-# --- Update (or create) the Lua line ---
-if [ -f "$LUA_FILE" ]; then
-    if grep -qE "$LUA_REGEX" "$LUA_FILE"; then
-        sed -i -E "s/(${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*)\"(${VALUE_A}|${VALUE_B})\"/\1\"${NEW_VALUE}\"/" "$LUA_FILE"
-    else
-        echo "${FUNC}(\"${ENV_NAME}\", \"${NEW_VALUE}\")" >> "$LUA_FILE"
-    fi
-    echo "Updated $LUA_FILE"
-else
-    echo "Note: $LUA_FILE does not exist, skipped."
-fi
-
-# --- Update (or create) the env file line ---
+# --- Update (or create) the env file ---
 mkdir -p "$(dirname "$ENV_FILE")"
 if [ -f "$ENV_FILE" ] && grep -qE "$ENV_REGEX" "$ENV_FILE"; then
     sed -i -E "s/^([[:space:]]*${ENV_NAME}[[:space:]]*=[[:space:]]*)(${VALUE_A}|${VALUE_B})[[:space:]]*$/\1${NEW_VALUE}/" "$ENV_FILE"
@@ -64,4 +63,53 @@ else
 fi
 echo "Updated $ENV_FILE"
 
-echo "Done. ${ENV_NAME} is now \"${NEW_VALUE}\" in both files."
+# --- Update (or create) the lua file ---
+if [ -f "$LUA_FILE" ]; then
+    if grep -qE "$LUA_REGEX" "$LUA_FILE"; then
+        sed -i -E "s/(${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*)\"(${VALUE_A}|${VALUE_B})\"/\1\"${NEW_VALUE}\"/" "$LUA_FILE"
+    else
+        echo "${FUNC}(\"${ENV_NAME}\", \"${NEW_VALUE}\")" >> "$LUA_FILE"
+    fi
+else
+    mkdir -p "$(dirname "$LUA_FILE")"
+    echo "${FUNC}(\"${ENV_NAME}\", \"${NEW_VALUE}\")" >> "$LUA_FILE"
+fi
+echo "Updated $LUA_FILE"
+
+# --- Switch the repo branch to match ---
+say "Syncing $REPO to branch \"${NEW_VALUE}\""
+
+if [[ -d "$REPO/.git" ]]; then
+    # Same guard as ryoku-track: don't touch a repo whose origin isn't ryoku-arch.
+    cur_origin=$(git -C "$REPO" remote get-url origin 2>/dev/null || true)
+    case "$cur_origin" in
+        *ryoku-arch*) ;;
+        *)
+            echo "ryoku-toggle-channel: $REPO is a git repo but its origin ($cur_origin) is not ryoku-arch; move it aside and re-run." >&2
+            exit 1
+            ;;
+    esac
+
+    # Don't clobber local edits silently.
+    if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
+        echo "ryoku-toggle-channel: $REPO has local changes/untracked files. Refusing to reset." >&2
+        echo "Stash, commit, or clean them up, then re-run." >&2
+        exit 1
+    fi
+
+    git -C "$REPO" remote set-url origin "$REPO_URL" 2>/dev/null || true
+    git -C "$REPO" fetch origin "$NEW_VALUE"
+    git -C "$REPO" checkout "$NEW_VALUE"
+    git -C "$REPO" reset --hard "origin/${NEW_VALUE}"
+    echo "Repo now on branch \"${NEW_VALUE}\" (reset to origin/${NEW_VALUE})."
+else
+    git clone -b "$NEW_VALUE" "$REPO_URL" "$REPO"
+    echo "Cloned $REPO on branch \"${NEW_VALUE}\"."
+fi
+
+say "Done. Channel is now \"${NEW_VALUE}\" in both config files, and $REPO is on branch \"${NEW_VALUE}\"."
+cat <<EOF
+
+pls run ryoku update to apply changed or something
+
+EOF

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# toggle_hypr_branch.sh
+#
+# Checks ~/.config/hypr/user.lua for the line:
+#   hl.env("RYOKU_CHANNEL", "unstable-dev")
+# or its "main" variant.
+#
+# If the line doesn't exist, it's added (defaulting to "main").
+# If it exists, it toggles between "main" and "unstable-dev".
+
+set -euo pipefail
+
+CONFIG_FILE="$HOME/.config/hypr/user.lua"
+
+FUNC="hl.env"
+ENV_NAME="RYOKU_CHANNEL"
+VALUE_A="main"
+VALUE_B="unstable-dev"
+
+# Matches: hl.env("RYOKU_CHANNEL", "main")  or  hl.env("RYOKU_CHANNEL", "unstable-dev")
+# (allows flexible whitespace around commas/parens)
+LINE_REGEX="^[[:space:]]*${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*\"(${VALUE_A}|${VALUE_B})\"[[:space:]]*\)"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "Error: $CONFIG_FILE does not exist."
+    exit 1
+fi
+
+if grep -qE "$LINE_REGEX" "$CONFIG_FILE"; then
+    CURRENT_VALUE=$(grep -oE "$LINE_REGEX" "$CONFIG_FILE" | grep -oE "\"(${VALUE_A}|${VALUE_B})\"" | tail -n1 | tr -d '"')
+
+    if [ "$CURRENT_VALUE" = "$VALUE_A" ]; then
+        NEW_VALUE="$VALUE_B"
+    else
+        NEW_VALUE="$VALUE_A"
+    fi
+
+    sed -i -E "s/(${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*)\"(${VALUE_A}|${VALUE_B})\"/\1\"${NEW_VALUE}\"/" "$CONFIG_FILE"
+
+    echo "Switched ${ENV_NAME} from \"${CURRENT_VALUE}\" to \"${NEW_VALUE}\"."
+else
+    echo "${FUNC}(\"${ENV_NAME}\", \"${VALUE_A}\")" >> "$CONFIG_FILE"
+    echo "Line not found. Added: ${FUNC}(\"${ENV_NAME}\", \"${VALUE_A}\")"
+fi

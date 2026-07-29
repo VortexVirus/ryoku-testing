@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# toggle_ryoku_channel.sh
+#
+# Toggles RYOKU_CHANNEL between "main" and "unstable-dev" in two files:
+#   ~/.config/hypr/user.lua           -> hl.env("RYOKU_CHANNEL", "unstable-dev")
+#   ~/.config/environment.d/ryoku.conf -> RYOKU_CHANNEL=unstable-dev
+#
+# If a line is missing from a file, it's added there (defaulting to "main").
+# Both files are kept in sync to the same final value.
+
+set -euo pipefail
+
+LUA_FILE="$HOME/.config/hypr/user.lua"
+ENV_FILE="$HOME/.config/environment.d/ryoku.conf"
+
+FUNC="hl.env"
+ENV_NAME="RYOKU_CHANNEL"
+VALUE_A="main"
+VALUE_B="unstable-dev"
+
+LUA_REGEX="^[[:space:]]*${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*\"(${VALUE_A}|${VALUE_B})\"[[:space:]]*\)"
+ENV_REGEX="^[[:space:]]*${ENV_NAME}[[:space:]]*=[[:space:]]*(${VALUE_A}|${VALUE_B})[[:space:]]*$"
+
+# --- Determine current value: prefer whichever file exists and has the line ---
+CURRENT_VALUE=""
+
+if [ -f "$LUA_FILE" ] && grep -qE "$LUA_REGEX" "$LUA_FILE"; then
+    CURRENT_VALUE=$(grep -oE "$LUA_REGEX" "$LUA_FILE" | grep -oE "\"(${VALUE_A}|${VALUE_B})\"" | tail -n1 | tr -d '"')
+elif [ -f "$ENV_FILE" ] && grep -qE "$ENV_REGEX" "$ENV_FILE"; then
+    CURRENT_VALUE=$(grep -oE "$ENV_REGEX" "$ENV_FILE" | grep -oE "(${VALUE_A}|${VALUE_B})[[:space:]]*$" | tail -n1 | tr -d '[:space:]')
+fi
+
+if [ -z "$CURRENT_VALUE" ]; then
+    NEW_VALUE="$VALUE_A"
+    echo "Neither file had the setting. Defaulting to \"${NEW_VALUE}\"."
+else
+    if [ "$CURRENT_VALUE" = "$VALUE_A" ]; then
+        NEW_VALUE="$VALUE_B"
+    else
+        NEW_VALUE="$VALUE_A"
+    fi
+    echo "Current value: \"${CURRENT_VALUE}\" -> switching to \"${NEW_VALUE}\"."
+fi
+
+# --- Update (or create) the Lua line ---
+if [ -f "$LUA_FILE" ]; then
+    if grep -qE "$LUA_REGEX" "$LUA_FILE"; then
+        sed -i -E "s/(${FUNC//./\\.}\([[:space:]]*\"${ENV_NAME}\"[[:space:]]*,[[:space:]]*)\"(${VALUE_A}|${VALUE_B})\"/\1\"${NEW_VALUE}\"/" "$LUA_FILE"
+    else
+        echo "${FUNC}(\"${ENV_NAME}\", \"${NEW_VALUE}\")" >> "$LUA_FILE"
+    fi
+    echo "Updated $LUA_FILE"
+else
+    echo "Note: $LUA_FILE does not exist, skipped."
+fi
+
+# --- Update (or create) the env file line ---
+mkdir -p "$(dirname "$ENV_FILE")"
+if [ -f "$ENV_FILE" ] && grep -qE "$ENV_REGEX" "$ENV_FILE"; then
+    sed -i -E "s/^([[:space:]]*${ENV_NAME}[[:space:]]*=[[:space:]]*)(${VALUE_A}|${VALUE_B})[[:space:]]*$/\1${NEW_VALUE}/" "$ENV_FILE"
+else
+    echo "${ENV_NAME}=${NEW_VALUE}" >> "$ENV_FILE"
+fi
+echo "Updated $ENV_FILE"
+
+echo "Done. ${ENV_NAME} is now \"${NEW_VALUE}\" in both files."
